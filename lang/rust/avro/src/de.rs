@@ -253,7 +253,7 @@ impl<'a, 'de> de::Deserializer<'de> for &'a Deserializer<'de> {
             Value::Union(_i, u) => match **u {
                 Value::Null => visitor.visit_unit(),
                 Value::Boolean(b) => visitor.visit_bool(b),
-                Value::Int(i) => visitor.visit_i32(i),
+                Value::Int(i) | Value::Date(i) | Value::TimeMillis(i) => visitor.visit_i32(i),
                 Value::Long(i)
                 | Value::TimeMicros(i)
                 | Value::TimestampMillis(i)
@@ -263,6 +263,7 @@ impl<'a, 'de> de::Deserializer<'de> for &'a Deserializer<'de> {
                 Value::Record(ref fields) => visitor.visit_map(StructDeserializer::new(fields)),
                 Value::Array(ref fields) => visitor.visit_seq(SeqDeserializer::new(fields)),
                 Value::String(ref s) => visitor.visit_borrowed_str(s),
+                Value::Uuid(uuid) => visitor.visit_str(&uuid.to_string()),
                 Value::Map(ref items) => visitor.visit_map(MapDeserializer::new(items)),
                 _ => Err(de::Error::custom(format!(
                     "unsupported union: {:?}",
@@ -272,6 +273,7 @@ impl<'a, 'de> de::Deserializer<'de> for &'a Deserializer<'de> {
             Value::Record(ref fields) => visitor.visit_map(StructDeserializer::new(fields)),
             Value::Array(ref fields) => visitor.visit_seq(SeqDeserializer::new(fields)),
             Value::String(ref s) => visitor.visit_borrowed_str(s),
+            Value::Uuid(uuid) => visitor.visit_str(&uuid.to_string()),
             Value::Map(ref items) => visitor.visit_map(MapDeserializer::new(items)),
             value => Err(de::Error::custom(format!(
                 "incorrect value of type: {:?}",
@@ -319,12 +321,22 @@ impl<'a, 'de> de::Deserializer<'de> for &'a Deserializer<'de> {
                     .map_err(|e| de::Error::custom(e.to_string()))
                     .and_then(|s| visitor.visit_string(s))
             }
+            Value::Uuid(ref u) => visitor.visit_str(&u.to_string()),
             Value::Union(_i, ref x) => match **x {
                 Value::String(ref s) => visitor.visit_borrowed_str(s),
-                _ => Err(de::Error::custom("not a string|bytes|fixed")),
+                Value::Bytes(ref bytes) | Value::Fixed(_, ref bytes) => {
+                    String::from_utf8(bytes.to_owned())
+                        .map_err(|e| de::Error::custom(e.to_string()))
+                        .and_then(|s| visitor.visit_string(s))
+                }
+                Value::Uuid(ref u) => visitor.visit_str(&u.to_string()),
+                _ => Err(de::Error::custom(format!(
+                    "Expected a String|Bytes|Fixed|Uuid, but got {:?}",
+                    x
+                ))),
             },
             _ => Err(de::Error::custom(format!(
-                "Expected a String|Bytes|Fixed|Union, but got {:?}",
+                "Expected a String|Bytes|Fixed|Uuid|Union, but got {:?}",
                 self.input
             ))),
         }
@@ -764,6 +776,7 @@ mod tests {
         let final_value: TestInner = from_value(&test_inner).unwrap();
         assert_eq!(final_value, expected_inner)
     }
+
     #[test]
     fn test_from_value_unit_enum() {
         let expected = TestUnitExternalEnum {
